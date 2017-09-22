@@ -76,27 +76,6 @@ class GuzzleFetcher implements FetcherInterface
     }
 
     /**
-     * @return \GuzzleHttp\Client
-     */
-    public function getClient(): Client
-    {
-
-        if (! $this->client)
-            $this->client = new Client;
-
-        return $this->client;
-    }
-
-    /**
-     * @param \GuzzleHttp\Client $client
-     */
-    public function setClient(Client $client)
-    {
-
-        $this->client = $client;
-    }
-
-    /**
      * @param string $method
      * @param string $uri
      * @param array  $body
@@ -116,106 +95,6 @@ class GuzzleFetcher implements FetcherInterface
             ]);
 
         return $this->httpRequest($method, $uri, $headers, $body);
-    }
-
-    /**
-     * @param string $uri
-     *
-     * @return string
-     */
-    public function stripRefreshTokenValue(string $uri): string
-    {
-
-        // If we have 'refresh_token' in the URI, strip it.
-        if (strpos($uri, 'refresh_token'))
-            return Uri::withoutQueryValue((new Uri($uri)), 'refresh_token')
-                ->__toString();
-
-        return $uri;
-    }
-
-    /**
-     * @param string $method
-     * @param string $uri
-     * @param array  $headers
-     * @param array  $body
-     *
-     * @return mixed|\Seat\Eseye\Containers\EsiResponse
-     * @throws \Seat\Eseye\Exceptions\RequestFailedException
-     */
-    public function httpRequest(
-        string $method, string $uri, array $headers = [], array $body = []): EsiResponse
-    {
-
-        // Include some basic headers to those already passed in. Everything
-        // is considered to be Json.
-        $headers = array_merge($headers, [
-            'Accept'       => 'application/json',
-            'Content-Type' => 'application/json',
-            'User-Agent'   => 'Eseye/' . Eseye::VERSION . '/' .
-                Configuration::getInstance()->http_user_agent,
-        ]);
-
-        // Add some debug logging and start measuring how long the request took.
-        $this->logger->debug('Making ' . $method . ' request to ' . $uri);
-        $start = microtime(true);
-
-
-        // Json encode the body if it has data, else just null it
-        if (count($body) > 0)
-            $body = json_encode($body);
-        else
-            $body = null;
-
-        try {
-
-            // Make the _actual_ request to ESI
-            $response = $this->getClient()->send(
-                new Request($method, $uri, $headers, $body));
-
-        } catch (ClientException $e) {
-
-            // Log the event as failed
-            $this->logger->error('[http ' . $e->getResponse()->getStatusCode() . '] ' .
-                '[' . $e->getResponse()->getReasonPhrase() . '] ' .
-                $method . ' -> ' . $this->stripRefreshTokenValue($uri) . ' [' .
-                number_format(microtime(true) - $start, 2) . 's]');
-
-            // Raise the exception that should be handled by the caller
-            throw new RequestFailedException($e,
-                $this->makeEsiResponse(
-                    (object) json_decode($e->getResponse()->getBody()), 'now',
-                    $e->getResponse()->getStatusCode())
-            );
-
-        }
-
-        // Log the sucessful request.
-        $this->logger->log('[http ' . $response->getStatusCode() . '] ' .
-            '[' . $response->getReasonPhrase() . '] ' .
-            $method . ' -> ' . $this->stripRefreshTokenValue($uri) . ' [' .
-            number_format(microtime(true) - $start, 2) . 's]');
-
-        // Return a container response that can be parsed.
-        return $this->makeEsiResponse(
-            (object) json_decode($response->getBody()),
-            $response->hasHeader('Expires') ? $response->getHeader('Expires')[0] : 'now',
-            $response->getStatusCode()
-        );
-    }
-
-    /**
-     * @param \stdClass $body
-     * @param string    $expires
-     * @param int       $status_code
-     *
-     * @return \Seat\Eseye\Containers\EsiResponse
-     */
-    public function makeEsiResponse(
-        stdClass $body, string $expires, int $status_code): EsiResponse
-    {
-
-        return new EsiResponse($body, $expires, $status_code);
     }
 
     /**
@@ -239,50 +118,6 @@ class GuzzleFetcher implements FetcherInterface
             throw new InvalidAuthencationException('Authentication data invalid/empty');
 
         $this->authentication = $authentication;
-    }
-
-    /**
-     * @return array
-     */
-    public function getAuthenticationScopes(): array
-    {
-
-        // If we dont have any authentication data, then
-        // only public calls can be made.
-        if (is_null($this->getAuthentication()))
-            return ['public'];
-
-        // If there are no scopes that we know of, update them.
-        // There will always be at least 1 as we add the internal
-        // 'public' scope.
-        if (count($this->getAuthentication()->scopes) <= 0)
-            $this->setAuthenticationScopes();
-
-        return $this->getAuthentication()->scopes;
-    }
-
-    /**
-     * Verify a token and set the Authentication scopes.
-     */
-    public function setAuthenticationScopes()
-    {
-
-        $scopes = $this->verifyToken()['Scopes'];
-
-        // Add the internal 'public' scope
-        $scopes = $scopes . ' public';
-        $this->authentication->scopes = explode(' ', $scopes);
-    }
-
-    /**
-     * Verify that an access_token is still valid.
-     */
-    private function verifyToken()
-    {
-
-        return $this->httpRequest('get', $this->sso_base . '/verify/', [
-            'Authorization' => 'Bearer ' . $this->getToken(),
-        ]);
     }
 
     /**
@@ -334,5 +169,169 @@ class GuzzleFetcher implements FetcherInterface
 
         // ... and update the container
         $this->authentication = $authentication;
+    }
+
+    /**
+     * @param string $method
+     * @param string $uri
+     * @param array  $headers
+     * @param array  $body
+     *
+     * @return mixed|\Seat\Eseye\Containers\EsiResponse
+     * @throws \Seat\Eseye\Exceptions\RequestFailedException
+     */
+    public function httpRequest(
+        string $method, string $uri, array $headers = [], array $body = []): EsiResponse
+    {
+
+        // Include some basic headers to those already passed in. Everything
+        // is considered to be Json.
+        $headers = array_merge($headers, [
+            'Accept'       => 'application/json',
+            'Content-Type' => 'application/json',
+            'User-Agent'   => 'Eseye/' . Eseye::VERSION . '/' .
+                Configuration::getInstance()->http_user_agent,
+        ]);
+
+        // Add some debug logging and start measuring how long the request took.
+        $this->logger->debug('Making ' . $method . ' request to ' . $uri);
+        $start = microtime(true);
+
+        // Json encode the body if it has data, else just null it
+        if (count($body) > 0)
+            $body = json_encode($body);
+        else
+            $body = null;
+
+        try {
+
+            // Make the _actual_ request to ESI
+            $response = $this->getClient()->send(
+                new Request($method, $uri, $headers, $body));
+
+        } catch (ClientException $e) {
+
+            // Log the event as failed
+            $this->logger->error('[http ' . $e->getResponse()->getStatusCode() . '] ' .
+                '[' . $e->getResponse()->getReasonPhrase() . '] ' .
+                $method . ' -> ' . $this->stripRefreshTokenValue($uri) . ' [' .
+                number_format(microtime(true) - $start, 2) . 's]');
+
+            // Raise the exception that should be handled by the caller
+            throw new RequestFailedException($e,
+                $this->makeEsiResponse(
+                    (object) json_decode($e->getResponse()->getBody()), 'now',
+                    $e->getResponse()->getStatusCode())
+            );
+
+        }
+
+        // Log the sucessful request.
+        $this->logger->log('[http ' . $response->getStatusCode() . '] ' .
+            '[' . $response->getReasonPhrase() . '] ' .
+            $method . ' -> ' . $this->stripRefreshTokenValue($uri) . ' [' .
+            number_format(microtime(true) - $start, 2) . 's]');
+
+        // Return a container response that can be parsed.
+        return $this->makeEsiResponse(
+            (object) json_decode($response->getBody()),
+            $response->hasHeader('Expires') ? $response->getHeader('Expires')[0] : 'now',
+            $response->getStatusCode()
+        );
+    }
+
+    /**
+     * @return \GuzzleHttp\Client
+     */
+    public function getClient(): Client
+    {
+
+        if (! $this->client)
+            $this->client = new Client;
+
+        return $this->client;
+    }
+
+    /**
+     * @param \GuzzleHttp\Client $client
+     */
+    public function setClient(Client $client)
+    {
+
+        $this->client = $client;
+    }
+
+    /**
+     * @param string $uri
+     *
+     * @return string
+     */
+    public function stripRefreshTokenValue(string $uri): string
+    {
+
+        // If we have 'refresh_token' in the URI, strip it.
+        if (strpos($uri, 'refresh_token'))
+            return Uri::withoutQueryValue((new Uri($uri)), 'refresh_token')
+                ->__toString();
+
+        return $uri;
+    }
+
+    /**
+     * @param \stdClass $body
+     * @param string    $expires
+     * @param int       $status_code
+     *
+     * @return \Seat\Eseye\Containers\EsiResponse
+     */
+    public function makeEsiResponse(
+        stdClass $body, string $expires, int $status_code): EsiResponse
+    {
+
+        return new EsiResponse($body, $expires, $status_code);
+    }
+
+    /**
+     * @return array
+     */
+    public function getAuthenticationScopes(): array
+    {
+
+        // If we dont have any authentication data, then
+        // only public calls can be made.
+        if (is_null($this->getAuthentication()))
+            return ['public'];
+
+        // If there are no scopes that we know of, update them.
+        // There will always be at least 1 as we add the internal
+        // 'public' scope.
+        if (count($this->getAuthentication()->scopes) <= 0)
+            $this->setAuthenticationScopes();
+
+        return $this->getAuthentication()->scopes;
+    }
+
+    /**
+     * Verify a token and set the Authentication scopes.
+     */
+    public function setAuthenticationScopes()
+    {
+
+        $scopes = $this->verifyToken()['Scopes'];
+
+        // Add the internal 'public' scope
+        $scopes = $scopes . ' public';
+        $this->authentication->scopes = explode(' ', $scopes);
+    }
+
+    /**
+     * Verify that an access_token is still valid.
+     */
+    private function verifyToken()
+    {
+
+        return $this->httpRequest('get', $this->sso_base . '/verify/', [
+            'Authorization' => 'Bearer ' . $this->getToken(),
+        ]);
     }
 }
