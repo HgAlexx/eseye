@@ -96,9 +96,9 @@ class GuzzleFetcherTest extends PHPUnit_Framework_TestCase
     public function testGuzzleFetcherMakeEsiResponseContainer()
     {
 
-        $response = json_decode(json_encode(['response' => 'ok']));
+        $response = json_encode(['response' => 'ok']);
 
-        $container = $this->fetcher->makeEsiResponse($response, 'now', 200);
+        $container = $this->fetcher->makeEsiResponse($response, [], 'now', 200);
 
         $this->assertInstanceOf(EsiResponse::class, $container);
     }

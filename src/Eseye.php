@@ -45,7 +45,7 @@ class Eseye
     /**
      * The Eseye Version.
      */
-    const VERSION = '0.0.10';
+    const VERSION = '0.0.11';
 
     /**
      * @var \Seat\Eseye\Containers\EsiAuthentication
@@ -61,6 +61,11 @@ class Eseye
      * @var
      */
     protected $cache;
+
+    /**
+     * @var \Seat\Eseye\Log\LogInterface
+     */
+    protected $logger;
 
     /**
      * @var
@@ -91,6 +96,13 @@ class Eseye
     protected $version = '/latest';
 
     /**
+     * HTTP verbs that could have their responses cached.
+     *
+     * @var array
+     */
+    protected $cachable_verb = ['get', 'post'];
+
+    /**
      * Eseye constructor.
      *
      * @param \Seat\Eseye\Containers\EsiAuthentication $authentication
@@ -102,7 +114,28 @@ class Eseye
         if (! is_null($authentication))
             $this->authentication = $authentication;
 
+        // Setup the logger
+        $this->logger = $this->getLogger();
+
         return $this;
+    }
+
+    /**
+     * @return \Seat\Eseye\Log\LogInterface
+     */
+    public function getLogger(): LogInterface
+    {
+
+        return $this->getConfiguration()->getLogger();
+    }
+
+    /**
+     * @return \Seat\Eseye\Configuration
+     */
+    public function getConfiguration(): Configuration
+    {
+
+        return Configuration::getInstance();
     }
 
     /**
@@ -177,6 +210,7 @@ class Eseye
      *
      * @return \Seat\Eseye\Containers\EsiResponse
      * @throws \Seat\Eseye\Exceptions\EsiScopeAccessDeniedException
+     * @throws \Seat\Eseye\Exceptions\UriDataMissingException
      */
     public function invoke(string $method, string $uri, array $uri_data = []): EsiResponse
     {
@@ -190,7 +224,7 @@ class Eseye
             $uri = $this->buildDataUri($uri, $uri_data);
 
             // Log the deny.
-            $this->getLogger()->warning('Access denied to ' . $uri . ' due to ' .
+            $this->logger->warning('Access denied to ' . $uri . ' due to ' .
                 'missing scopes.');
 
             throw new EsiScopeAccessDeniedException('Access denied to ' . $uri);
@@ -200,7 +234,7 @@ class Eseye
         $uri = $this->buildDataUri($uri, $uri_data);
 
         // Check if there is a cached response we can return
-        if (strtolower($method) == 'get' &&
+        if (in_array(strtolower($method), $this->cachable_verb) &&
             $cached = $this->getCache()->get($uri->getPath(), $uri->getQuery())
         )
             return $cached;
@@ -209,8 +243,13 @@ class Eseye
         $result = $this->rawFetch($method, $uri, $this->getBody());
 
         // Cache the response if it was a get and is not already expired
-        if (strtolower($method) == 'get' && ! $result->expired())
+        if (in_array(strtolower($method), $this->cachable_verb) && ! $result->expired())
             $this->getCache()->set($uri->getPath(), $uri->getQuery(), $result);
+
+        // In preperation for the next request, perform some
+        // self cleanups of this objects request data such as
+        // query string parameters and post bodies.
+        $this->cleanupRequestData();
 
         return $result;
     }
@@ -244,19 +283,11 @@ class Eseye
     }
 
     /**
-     * @return \Seat\Eseye\Configuration
-     */
-    public function getConfiguration(): Configuration
-    {
-
-        return Configuration::getInstance();
-    }
-
-    /**
      * @param string $uri
      * @param array  $data
      *
      * @return \GuzzleHttp\Psr7\Uri
+     * @throws \Seat\Eseye\Exceptions\UriDataMissingException
      */
     public function buildDataUri(string $uri, array $data): Uri
     {
@@ -293,7 +324,7 @@ class Eseye
     public function setQueryString(array $query): self
     {
 
-        $this->query_string = $query;
+        $this->query_string = array_merge($this->query_string, $query);
 
         return $this;
     }
@@ -360,15 +391,6 @@ class Eseye
     }
 
     /**
-     * @return \Seat\Eseye\Log\LogInterface
-     */
-    public function getLogger(): LogInterface
-    {
-
-        return $this->getConfiguration()->getLogger();
-    }
-
-    /**
      * @return \Seat\Eseye\Cache\CacheInterface
      */
     private function getCache(): CacheInterface
@@ -397,5 +419,54 @@ class Eseye
     {
 
         return $this->request_body;
+    }
+
+    /**
+     * @return \Seat\Eseye\Eseye
+     */
+    public function cleanupRequestData(): self
+    {
+
+        $this->unsetBody();
+        $this->unsetQueryString();
+
+        return $this;
+    }
+
+    /**
+     * @return \Seat\Eseye\Eseye
+     */
+    public function unsetBody(): self
+    {
+
+        $this->request_body = [];
+
+        return $this;
+    }
+
+    /**
+     * @return \Seat\Eseye\Eseye
+     */
+    public function unsetQueryString(): self
+    {
+
+        $this->query_string = [];
+
+        return $this;
+    }
+
+    /**
+     * A helper method to specify the page to retreive.
+     *
+     * @param int $page
+     *
+     * @return \Seat\Eseye\Eseye
+     */
+    public function page(int $page): self
+    {
+
+        $this->setQueryString(['page' => $page]);
+
+        return $this;
     }
 }

@@ -24,6 +24,7 @@ namespace Seat\Eseye\Fetchers;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
+use GuzzleHttp\Exception\ServerException;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Uri;
 use Seat\Eseye\Configuration;
@@ -32,7 +33,6 @@ use Seat\Eseye\Containers\EsiResponse;
 use Seat\Eseye\Eseye;
 use Seat\Eseye\Exceptions\InvalidAuthencationException;
 use Seat\Eseye\Exceptions\RequestFailedException;
-use stdClass;
 
 /**
  * Class GuzzleFetcher.
@@ -82,6 +82,8 @@ class GuzzleFetcher implements FetcherInterface
      * @param array  $headers
      *
      * @return mixed|\Seat\Eseye\Containers\EsiResponse
+     * @throws \Seat\Eseye\Exceptions\InvalidAuthencationException
+     * @throws \Seat\Eseye\Exceptions\RequestFailedException
      */
     public function call(
         string $method, string $uri, array $body, array $headers = []): EsiResponse
@@ -123,6 +125,7 @@ class GuzzleFetcher implements FetcherInterface
     /**
      * @return string
      * @throws \Seat\Eseye\Exceptions\InvalidAuthencationException
+     * @throws \Seat\Eseye\Exceptions\RequestFailedException
      */
     private function getToken(): string
     {
@@ -136,8 +139,8 @@ class GuzzleFetcher implements FetcherInterface
         // Check the expiry date.
         $expires = carbon($this->getAuthentication()->token_expires);
 
-        // If the token expires in the next 5 minues, refresh it.
-        if ($expires <= carbon('now')->addMinute(5))
+        // If the token expires in the next minute, refresh it.
+        if ($expires->lte(carbon('now')->addMinute(1)))
             $this->refreshToken();
 
         return $this->getAuthentication()->access_token;
@@ -145,6 +148,9 @@ class GuzzleFetcher implements FetcherInterface
 
     /**
      * Refresh the Access token that we have in the EsiAccess container.
+     *
+     * @throws \Seat\Eseye\Exceptions\RequestFailedException
+     * @throws \Seat\Eseye\Exceptions\InvalidAuthencationException
      */
     private function refreshToken()
     {
@@ -168,7 +174,7 @@ class GuzzleFetcher implements FetcherInterface
             ->addSeconds($response->expires_in);
 
         // ... and update the container
-        $this->authentication = $authentication;
+        $this->setAuthentication($authentication);
     }
 
     /**
@@ -209,32 +215,38 @@ class GuzzleFetcher implements FetcherInterface
             $response = $this->getClient()->send(
                 new Request($method, $uri, $headers, $body));
 
-        } catch (ClientException $e) {
+        } catch (ClientException | ServerException $e) {
 
             // Log the event as failed
-            $this->logger->error('[http ' . $e->getResponse()->getStatusCode() . '] ' .
-                '[' . $e->getResponse()->getReasonPhrase() . '] ' .
-                $method . ' -> ' . $this->stripRefreshTokenValue($uri) . ' [' .
-                number_format(microtime(true) - $start, 2) . 's]');
+            $this->logger->error('[http ' . $e->getResponse()->getStatusCode() . ', ' .
+                strtolower($e->getResponse()->getReasonPhrase()) . '] ' .
+                $method . ' -> ' . $this->stripRefreshTokenValue($uri) . ' [t/e: ' .
+                number_format(microtime(true) - $start, 2) . 's/' .
+                implode(' ', $e->getResponse()->getHeader('X-Esi-Error-Limit-Remain')) . ']'
+            );
 
             // Raise the exception that should be handled by the caller
             throw new RequestFailedException($e,
                 $this->makeEsiResponse(
-                    (object) json_decode($e->getResponse()->getBody()), 'now',
+                    $e->getResponse()->getBody()->getContents(),
+                    $e->getResponse()->getHeaders(),
+                    'now',
                     $e->getResponse()->getStatusCode())
             );
-
         }
 
         // Log the sucessful request.
-        $this->logger->log('[http ' . $response->getStatusCode() . '] ' .
-            '[' . $response->getReasonPhrase() . '] ' .
-            $method . ' -> ' . $this->stripRefreshTokenValue($uri) . ' [' .
-            number_format(microtime(true) - $start, 2) . 's]');
+        $this->logger->log('[http ' . $response->getStatusCode() . ', ' .
+            strtolower($response->getReasonPhrase()) . '] ' .
+            $method . ' -> ' . $this->stripRefreshTokenValue($uri) . ' [t/e: ' .
+            number_format(microtime(true) - $start, 2) . 's/' .
+            implode(' ', $response->getHeader('X-Esi-Error-Limit-Remain')) . ']'
+        );
 
         // Return a container response that can be parsed.
         return $this->makeEsiResponse(
-            (object) json_decode($response->getBody()),
+            $response->getBody()->getContents(),
+            $response->getHeaders(),
             $response->hasHeader('Expires') ? $response->getHeader('Expires')[0] : 'now',
             $response->getStatusCode()
         );
@@ -278,17 +290,18 @@ class GuzzleFetcher implements FetcherInterface
     }
 
     /**
-     * @param \stdClass $body
-     * @param string    $expires
-     * @param int       $status_code
+     * @param string $body
+     * @param array  $headers
+     * @param string $expires
+     * @param int    $status_code
      *
      * @return \Seat\Eseye\Containers\EsiResponse
      */
     public function makeEsiResponse(
-        stdClass $body, string $expires, int $status_code): EsiResponse
+        string $body, array $headers, string $expires, int $status_code): EsiResponse
     {
 
-        return new EsiResponse($body, $expires, $status_code);
+        return new EsiResponse($body, $headers, $expires, $status_code);
     }
 
     /**
